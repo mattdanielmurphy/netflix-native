@@ -101,21 +101,61 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     
     // MARK: - WKNavigationDelegate
     
+    private func isInternalDomain(_ host: String) -> Bool {
+        let h = host.lowercased()
+        if h.isEmpty { return true }
+        let allowedDomains = [
+            "netflix.com",
+            "netflix.net",
+            "nflxvideo.net",
+            "nflximg.net",
+            "nflxext.com",
+            "nflxso.net",
+            "fast.com",
+            "google.com",
+            "gstatic.com",
+            "recaptcha.net",
+            "arkoselabs.com",
+            "arkose.com"
+        ]
+        return allowedDomains.contains { h == $0 || h.hasSuffix("." + $0) }
+    }
+    
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = navigationAction.request.url else {
             decisionHandler(.allow)
             return
         }
         
+        let scheme = url.scheme?.lowercased() ?? ""
+        if scheme == "about" || scheme == "blob" || scheme == "data" || scheme == "javascript" {
+            decisionHandler(.allow)
+            return
+        }
+        
+        // Never forward subframe or non-main frame navigations (recaptcha, tracking, auth iframes) to external browser
+        guard let targetFrame = navigationAction.targetFrame, targetFrame.isMainFrame else {
+            decisionHandler(.allow)
+            return
+        }
+        
         let host = url.host?.lowercased() ?? ""
         
-        // Keep Netflix & auth domains internal; forward third-party external links to default browser
-        if host.contains("netflix.com") || host.contains("nflxvideo.net") || host.contains("nflximg.net") || host.contains("nflxext.com") || host.isEmpty {
+        // Keep internal and partner domains within WKWebView
+        if isInternalDomain(host) {
             decisionHandler(.allow)
-        } else {
+            return
+        }
+        
+        // Only open system default browser if the user explicitly clicked an external link
+        if navigationAction.navigationType == .linkActivated {
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
+            return
         }
+        
+        // Allow all other navigations internally
+        decisionHandler(.allow)
     }
     
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
@@ -146,9 +186,17 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     // MARK: - WKUIDelegate
     
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        // Route popup requests into the current webview
         if navigationAction.targetFrame == nil {
-            webView.load(navigationAction.request)
+            if let url = navigationAction.request.url {
+                let host = url.host?.lowercased() ?? ""
+                if isInternalDomain(host) {
+                    webView.load(navigationAction.request)
+                } else if navigationAction.navigationType == .linkActivated {
+                    NSWorkspace.shared.open(url)
+                } else {
+                    webView.load(navigationAction.request)
+                }
+            }
         }
         return nil
     }
