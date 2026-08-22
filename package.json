@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "Native macOS WebKit wrapper for Netflix",
   "scripts": {
-    "dev": "bash bin/build_and_bundle.sh && open build/Netflix.app",
-    "start": "open build/Netflix.app",
+    "dev": "bash bin/build_and_bundle.sh && open /Applications/Netflix.app",
+    "start": "open /Applications/Netflix.app",
     "build": "bash bin/build_and_bundle.sh"
   }
 }

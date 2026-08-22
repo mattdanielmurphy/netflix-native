@@ -25,4 +25,13 @@ fi
 codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
 touch "$APP_BUNDLE"
 
-echo "✅ Successfully built: $APP_BUNDLE"
+DEST_APP="/Applications/Netflix.app"
+echo "🚀 Installing to /Applications..."
+if [ -d "$DEST_APP" ]; then
+    mv "$DEST_APP" "$HOME/.Trash/Netflix_$(date +%s).app" 2>/dev/null || true
+fi
+cp -R "$APP_BUNDLE" "$DEST_APP"
+codesign --force --deep --sign - "$DEST_APP" 2>/dev/null || true
+touch "$DEST_APP"
+
+echo "✅ Successfully built and installed: $DEST_APP"
