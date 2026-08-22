@@ -1,0 +1,10 @@
+{
+  "name": "netflix-native",
+  "version": "1.0.0",
+  "description": "Native macOS WebKit wrapper for Netflix",
+  "scripts": {
+    "dev": "bash bin/build_and_bundle.sh && open build/Netflix.app",
+    "start": "open build/Netflix.app",
+    "build": "bash bin/build_and_bundle.sh"
+  }
+}

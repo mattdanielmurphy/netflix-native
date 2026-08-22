@@ -19,9 +19,11 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         
         super.init(window: window)
         
+        window.isReleasedWhenClosed = false
         setupWindowAppearance(window)
         window.delegate = self
         window.contentViewController = webViewController
+        window.center()
         window.setFrameAutosaveName(AppConfiguration.appWindowAutosaveName)
     }
     

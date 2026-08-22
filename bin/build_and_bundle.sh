@@ -21,4 +21,8 @@ if [ -f "$PROJECT_ROOT/Resources/AppIcon.icns" ]; then
     cp "$PROJECT_ROOT/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
 
+# Ad-hoc code sign bundle for LaunchServices
+codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
+touch "$APP_BUNDLE"
+
 echo "✅ Successfully built: $APP_BUNDLE"
