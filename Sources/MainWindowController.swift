@@ -1,11 +1,28 @@
 import Cocoa
 
+final class MainWindow: NSWindow {
+    override func keyDown(with event: NSEvent) {
+        // Silence macOS alert beep for media and navigation keys handled asynchronously by WebKit
+        switch event.keyCode {
+        case 49,                 // Spacebar (Play/Pause)
+             123, 124, 125, 126, // Arrow keys (Left, Right, Down, Up)
+             3,                  // F (Fullscreen)
+             46,                 // M (Mute)
+             1,                  // S (Skip Intro)
+             40:                 // K (Play/Pause)
+            return
+        default:
+            super.keyDown(with: event)
+        }
+    }
+}
+
 final class MainWindowController: NSWindowController, NSWindowDelegate {
     private let webViewController = WebViewController()
     
     init() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 100, y: 100, width: 1280, height: 800),
+        let window = MainWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1280, height: 800),
             styleMask: [
                 .titled,
                 .closable,

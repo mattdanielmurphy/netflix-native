@@ -52,6 +52,31 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         webpagePreferences.allowsContentJavaScript = true
         configuration.defaultWebpagePreferences = webpagePreferences
         
+        // Inject script to ensure Spacebar cleanly toggles play/pause without scroll or unhandled beep
+        let userContentController = WKUserContentController()
+        let spacebarScriptSource = """
+        window.addEventListener('keydown', function(e) {
+            if (e.code === 'Space' || e.keyCode === 32) {
+                var active = document.activeElement;
+                var isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
+                if (!isInput) {
+                    var video = document.querySelector('video');
+                    if (video) {
+                        e.preventDefault();
+                        if (video.paused) {
+                            video.play();
+                        } else {
+                            video.pause();
+                        }
+                    }
+                }
+            }
+        }, true);
+        """
+        let userScript = WKUserScript(source: spacebarScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        userContentController.addUserScript(userScript)
+        configuration.userContentController = userContentController
+        
         return configuration
     }
     
