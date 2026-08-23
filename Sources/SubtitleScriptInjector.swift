@@ -217,28 +217,64 @@ struct SubtitleScriptInjector {
         }
 
         function ensureSubtitlesActive() {
+            // Method 1: Cadence VideoPlayer API track selection
             try {
                 var player = getNetflixVideoPlayer();
-                if (player && typeof player.getTimedTextTracks === 'function' && typeof player.setTimedTextTrack === 'function') {
-                    var currentTrack = typeof player.getTimedTextTrack === 'function' ? player.getTimedTextTrack() : null;
+                if (player) {
+                    var currentTrack = null;
+                    if (typeof player.getTimedTextTrack === 'function') {
+                        currentTrack = player.getTimedTextTrack();
+                    }
                     if (!currentTrack || !currentTrack.trackId || currentTrack.trackId === 'none') {
-                        var tracks = player.getTimedTextTracks();
-                        if (tracks && tracks.length > 0) {
-                            // Select English or primary default track
-                            var selectedTrack = tracks.find(function(t) {
-                                return t.bcp47 === 'en' || (t.language && t.language.toLowerCase().indexOf('english') !== -1);
-                            }) || tracks[0];
-                            
-                            if (selectedTrack) {
-                                player.setTimedTextTrack(selectedTrack);
+                        if (typeof player.getTimedTextTracks === 'function' && typeof player.setTimedTextTrack === 'function') {
+                            var tracks = player.getTimedTextTracks();
+                            if (tracks && tracks.length > 0) {
+                                var selectedTrack = tracks.find(function(t) {
+                                    return t.bcp47 === 'en' || (t.language && t.language.toLowerCase().indexOf('english') !== -1);
+                                }) || tracks[0];
+                                
+                                if (selectedTrack) {
+                                    player.setTimedTextTrack(selectedTrack);
+                                    return;
+                                }
                             }
                         }
                     }
                 }
             } catch(e) {
-                // Ignore silent track activation errors
+                console.warn('[NetflixNative] Cadence timed text track activation error:', e);
+            }
+
+            // Method 2: DOM UI interaction fallback (Open audio/subtitle menu if not selected)
+            try {
+                var subtitleContainer = document.querySelector('.player-timedtext, .timed-text-container');
+                if (!subtitleContainer || !subtitleContainer.innerText) {
+                    var audioSubButton = document.querySelector('button[data-uia="control-audio-subtitle"], button[aria-label*="Subtitles"], button[aria-label*="Audio"]');
+                    if (audioSubButton) {
+                        // Click to open menu if not already open
+                        var menu = document.querySelector('[data-uia="audio-subtitle-controller"]');
+                        if (!menu) {
+                            audioSubButton.click();
+                            setTimeout(function() {
+                                var englishOption = document.querySelector('[data-uia="subtitle-item-en"], [data-uia*="subtitle-item"][aria-label*="English"], li[data-uia*="subtitle-item"]');
+                                if (englishOption) {
+                                    englishOption.click();
+                                }
+                                // Close menu by clicking button again
+                                setTimeout(function() {
+                                    if (document.querySelector('[data-uia="audio-subtitle-controller"]')) {
+                                        audioSubButton.click();
+                                    }
+                                }, 100);
+                            }, 150);
+                        }
+                    }
+                }
+            } catch(err) {
+                console.warn('[NetflixNative] DOM subtitle button click error:', err);
             }
         }
+
 
         // Programmatic Seeking API using Cadence VideoPlayer API (avoiding video.currentTime deadlock)
         window.__netflixNativeSeek = function(targetSeconds) {
