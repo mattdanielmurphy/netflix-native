@@ -216,7 +216,12 @@ struct SubtitleScriptInjector {
             }
         }
 
+        var hasAutoSelectedSubtitles = false;
+        var isSelectingSubtitles = false;
+
         function ensureSubtitlesActive() {
+            if (hasAutoSelectedSubtitles || isSelectingSubtitles) return;
+
             // Method 1: Cadence VideoPlayer API track selection
             try {
                 var player = getNetflixVideoPlayer();
@@ -225,18 +230,21 @@ struct SubtitleScriptInjector {
                     if (typeof player.getTimedTextTrack === 'function') {
                         currentTrack = player.getTimedTextTrack();
                     }
-                    if (!currentTrack || !currentTrack.trackId || currentTrack.trackId === 'none') {
-                        if (typeof player.getTimedTextTracks === 'function' && typeof player.setTimedTextTrack === 'function') {
-                            var tracks = player.getTimedTextTracks();
-                            if (tracks && tracks.length > 0) {
-                                var selectedTrack = tracks.find(function(t) {
-                                    return t.bcp47 === 'en' || (t.language && t.language.toLowerCase().indexOf('english') !== -1);
-                                }) || tracks[0];
-                                
-                                if (selectedTrack) {
-                                    player.setTimedTextTrack(selectedTrack);
-                                    return;
-                                }
+                    if (currentTrack && currentTrack.trackId && currentTrack.trackId !== 'none') {
+                        hasAutoSelectedSubtitles = true;
+                        return;
+                    }
+                    if (typeof player.getTimedTextTracks === 'function' && typeof player.setTimedTextTrack === 'function') {
+                        var tracks = player.getTimedTextTracks();
+                        if (tracks && tracks.length > 0) {
+                            var selectedTrack = tracks.find(function(t) {
+                                return t.bcp47 === 'en' || (t.language && t.language.toLowerCase().indexOf('english') !== -1);
+                            }) || tracks[0];
+                            
+                            if (selectedTrack) {
+                                player.setTimedTextTrack(selectedTrack);
+                                hasAutoSelectedSubtitles = true;
+                                return;
                             }
                         }
                     }
@@ -247,57 +255,56 @@ struct SubtitleScriptInjector {
 
             // Method 2: DOM UI interaction fallback (Open audio/subtitle menu if not selected)
             try {
-                var subtitleContainer = document.querySelector('.player-timedtext, .timed-text-container');
-                if (!subtitleContainer || !subtitleContainer.innerText) {
-                    var audioSubButton = document.querySelector('button[data-uia="control-audio-subtitle"], button[aria-label*="Subtitles"], button[aria-label*="Audio"]');
-                    if (audioSubButton) {
-                        // Click to open menu if not already open
-                        var menu = document.querySelector('[data-uia="audio-subtitle-controller"], .audio-subtitle-controller');
-                        if (!menu) {
-                            audioSubButton.click();
-                            setTimeout(function() {
-                                var foundTarget = null;
-                                
-                                // Look for subtitle column options
-                                var allOptions = document.querySelectorAll('li, div[role="button"], button, [data-uia*="subtitle"]');
-                                for (var i = 0; i < allOptions.length; i++) {
-                                    var el = allOptions[i];
-                                    var text = (el.innerText || el.textContent || '').trim();
-                                    
-                                    // Match "English" or "English (CC)" or "English [CC]"
-                                    var isEnglishText = text === 'English' || text.indexOf('English (CC)') === 0 || text.indexOf('English [CC]') === 0;
-                                    if (isEnglishText && text.indexOf('[Original]') === -1 && text.indexOf('Audio Description') === -1) {
-                                        // Ensure it's under the Subtitles column (not Audio column)
-                                        var parentCol = el.closest('.track-list, [data-uia*="subtitle"], div, ul');
-                                        var prevHeader = el.parentElement ? el.parentElement.querySelector('h3, header, .header') : null;
-                                        var isAudio = (prevHeader && prevHeader.innerText.indexOf('Audio') !== -1);
-                                        
-                                        if (!isAudio) {
-                                            foundTarget = el;
-                                            break;
-                                        }
-                                    }
-                                }
-                                
-                                if (foundTarget) {
-                                    foundTarget.click();
-                                }
-                                
-                                // Close menu after selection
-                                setTimeout(function() {
-                                    var openMenu = document.querySelector('[data-uia="audio-subtitle-controller"], .audio-subtitle-controller');
-                                    if (openMenu) {
-                                        audioSubButton.click();
-                                    }
-                                }, 150);
-                            }, 250);
+                var audioSubButton = document.querySelector('button[data-uia="control-audio-subtitle"], button[aria-label*="Subtitles"], button[aria-label*="Audio"]');
+                if (!audioSubButton) return;
+
+                isSelectingSubtitles = true;
+                audioSubButton.click();
+
+                setTimeout(function() {
+                    var foundTarget = null;
+                    
+                    var allOptions = document.querySelectorAll('li, div[role="button"], button, [data-uia*="subtitle"]');
+                    for (var i = 0; i < allOptions.length; i++) {
+                        var el = allOptions[i];
+                        var text = (el.innerText || el.textContent || '').trim();
+                        
+                        var isEnglishText = text === 'English' || text.indexOf('English (CC)') === 0 || text.indexOf('English [CC]') === 0;
+                        if (isEnglishText && text.indexOf('[Original]') === -1 && text.indexOf('Audio Description') === -1) {
+                            var prevHeader = el.parentElement ? el.parentElement.querySelector('h3, header, .header') : null;
+                            var isAudio = (prevHeader && prevHeader.innerText.indexOf('Audio') !== -1);
+                            
+                            if (!isAudio) {
+                                foundTarget = el;
+                                break;
+                            }
                         }
                     }
-                }
+                    
+                    if (foundTarget) {
+                        foundTarget.click();
+                        hasAutoSelectedSubtitles = true;
+                    }
+                    
+                    // Dismiss menu by pressing Escape or clicking video background
+                    setTimeout(function() {
+                        var escEvent = new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, which: 27, bubbles: true });
+                        document.dispatchEvent(escEvent);
+
+                        var video = getActiveVideo();
+                        if (video) {
+                            video.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+                        }
+
+                        isSelectingSubtitles = false;
+                    }, 200);
+                }, 300);
             } catch(err) {
+                isSelectingSubtitles = false;
                 console.warn('[NetflixNative] DOM subtitle button click error:', err);
             }
         }
+
 
 
 
@@ -400,6 +407,8 @@ struct SubtitleScriptInjector {
 
             if (window.location.href !== currentUrl) {
                 currentUrl = window.location.href;
+                hasAutoSelectedSubtitles = false;
+                isSelectingSubtitles = false;
                 lastSubtitleText = '';
                 lastSubtitleTime = 0;
                 postToNative({
@@ -415,3 +424,4 @@ struct SubtitleScriptInjector {
     })();
     """
 }
+
