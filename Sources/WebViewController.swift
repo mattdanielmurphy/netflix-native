@@ -1,10 +1,13 @@
 import Cocoa
 import WebKit
+import SwiftUI
 
 final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDelegate {
     private var webView: WKWebView!
     private var sleepObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
+    private var subtitleBridge: SubtitleStreamBridge!
+    private var overlayHostingView: NSHostingView<DialogueWaterfallSwiftUIView>?
     
     override func loadView() {
         let config = createWebViewConfiguration()
@@ -17,12 +20,26 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         // Prevent background view occlusion throttling
         webView.wantsLayer = true
         
-        self.view = webView
+        let containerView = NSView()
+        containerView.wantsLayer = true
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        containerView.addSubview(webView)
+        
+        NSLayoutConstraint.activate([
+            webView.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
+            webView.topAnchor.constraint(equalTo: containerView.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: containerView.bottomAnchor)
+        ])
+        
+        setupDialogueOverlay(in: containerView)
+        self.view = containerView
     }
     
     override func viewDidLoad() {
         super.viewDidLoad()
         setupSleepWakeObservers()
+        setupAppStateHooks()
         loadNetflix()
     }
     
@@ -30,6 +47,69 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         if let obs = sleepObserver { NotificationCenter.default.removeObserver(obs) }
         if let obs = wakeObserver { NotificationCenter.default.removeObserver(obs) }
         AppState.shared.endPlaybackActivity()
+    }
+    
+    private func setupAppStateHooks() {
+        AppState.shared.onSeekRequested = { [weak self] seconds in
+            self?.seekVideo(to: seconds)
+        }
+        
+        AppState.shared.onOverlayVisibilityChanged = { [weak self] visible in
+            self?.updateOverlayVisibility(visible)
+        }
+        
+        AppState.shared.onDialogueHistoryChanged = { cues in
+            if let last = cues.last {
+                EmbeddedHTTPServer.shared.broadcastCue(last)
+            }
+        }
+    }
+    
+    private func setupDialogueOverlay(in container: NSView) {
+        let hostingView = NSHostingView(rootView: DialogueWaterfallSwiftUIView())
+        hostingView.translatesAutoresizingMaskIntoConstraints = false
+        hostingView.wantsLayer = true
+        hostingView.isHidden = true
+        hostingView.layer?.opacity = 0.0
+        
+        container.addSubview(hostingView)
+        
+        NSLayoutConstraint.activate([
+            hostingView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -20),
+            hostingView.topAnchor.constraint(equalTo: container.topAnchor, constant: 40),
+            hostingView.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -40),
+            hostingView.widthAnchor.constraint(equalToConstant: 340)
+        ])
+        
+        self.overlayHostingView = hostingView
+    }
+    
+    private func updateOverlayVisibility(_ visible: Bool) {
+        guard let overlay = overlayHostingView else { return }
+        
+        if visible {
+            overlay.isHidden = false
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.25
+                context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                overlay.animator().alphaValue = 1.0
+            }
+        } else {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.2
+                context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                overlay.animator().alphaValue = 0.0
+            }, completionHandler: {
+                if !AppState.shared.isOverlayVisible {
+                    overlay.isHidden = true
+                }
+            })
+        }
+    }
+    
+    func seekVideo(to seconds: Double) {
+        let js = "if (window.__netflixNativeSeek) { window.__netflixNativeSeek(\(seconds)); }"
+        webView.evaluateJavaScript(js, completionHandler: nil)
     }
     
     private func createWebViewConfiguration() -> WKWebViewConfiguration {
@@ -52,8 +132,13 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         webpagePreferences.allowsContentJavaScript = true
         configuration.defaultWebpagePreferences = webpagePreferences
         
-        // Inject script to ensure Spacebar cleanly toggles play/pause without scroll or unhandled beep
         let userContentController = WKUserContentController()
+        
+        // Subtitle & Dialogue Bridge
+        subtitleBridge = SubtitleStreamBridge(webViewController: self)
+        userContentController.add(subtitleBridge, name: "subtitleStream")
+        
+        // Spacebar play/pause handler
         let spacebarScriptSource = """
         window.addEventListener('keydown', function(e) {
             if (e.code === 'Space' || e.keyCode === 32) {
@@ -73,10 +158,14 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             }
         }, true);
         """
-        let userScript = WKUserScript(source: spacebarScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
-        userContentController.addUserScript(userScript)
-        configuration.userContentController = userContentController
+        let spacebarScript = WKUserScript(source: spacebarScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        userContentController.addUserScript(spacebarScript)
         
+        // Subtitle Extractor & Remote Control Script
+        let extractorScript = WKUserScript(source: SubtitleScriptInjector.scriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        userContentController.addUserScript(extractorScript)
+        
+        configuration.userContentController = userContentController
         return configuration
     }
     
@@ -113,7 +202,6 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     
     private func handleSystemWillSleep() {
         AppState.shared.endPlaybackActivity()
-        // Gracefully pause HTML5 video to avoid audio/video buffer desync
         let pauseScript = "if (document.querySelector('video')) { document.querySelector('video').pause(); }"
         webView.evaluateJavaScript(pauseScript, completionHandler: nil)
     }
@@ -158,28 +246,23 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
             return
         }
         
-        // Never forward subframe or non-main frame navigations (recaptcha, tracking, auth iframes) to external browser
         guard let targetFrame = navigationAction.targetFrame, targetFrame.isMainFrame else {
             decisionHandler(.allow)
             return
         }
         
         let host = url.host?.lowercased() ?? ""
-        
-        // Keep internal and partner domains within WKWebView
         if isInternalDomain(host) {
             decisionHandler(.allow)
             return
         }
         
-        // Only open system default browser if the user explicitly clicked an external link
         if navigationAction.navigationType == .linkActivated {
             NSWorkspace.shared.open(url)
             decisionHandler(.cancel)
             return
         }
         
-        // Allow all other navigations internally
         decisionHandler(.allow)
     }
     
@@ -192,6 +275,7 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         } else {
             AppState.shared.currentPlaybackState = .idle
             AppState.shared.endPlaybackActivity()
+            AppState.shared.setOverlayVisible(false)
         }
     }
     
@@ -202,7 +286,6 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         AppState.shared.endPlaybackActivity()
         NSLog("[NetflixNative] WebContent process terminated. Recovering (attempt \(AppState.shared.crashReloadCount))...")
         
-        // Automatic recovery after WebKit process kill/crash
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             self?.webView.reload()
         }
@@ -226,3 +309,4 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         return nil
     }
 }
+

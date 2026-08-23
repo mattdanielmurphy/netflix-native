@@ -6,3 +6,5 @@
 - **2026-08-22 17:53**: Silenced macOS system alert sound on Spacebar/media keys by creating custom `MainWindow: NSWindow` subclass overriding `keyDown` to absorb unhandled media keys, and injected a `WKUserScript` DOM listener to toggle play/pause and prevent scroll.
 - **2026-08-22 17:57**: Updated `bin/build_and_bundle.sh` to automatically install `Netflix.app` to `/Applications/Netflix.app` upon build completion, safely trashing any preexisting version, and updated `package.json` scripts.
 - **2026-08-22 18:04**: Created public GitHub repository (`mattdanielmurphy/netflix-native`), added MIT license, and published comprehensive README with 4K requirements warning, feature breakdown, keyboard shortcuts, and 1-line installation instructions.
+- **2026-08-23 01:08**: Implemented real-time subtitle extraction, Mac dialogue waterfall HUD overlay (with search and click-to-seek via `⌘⇧D` / `D` / scroll-up), and an embedded zero-dependency local HTTP/WebSocket streaming server (`EmbeddedHTTPServer.swift` using `NWListener`) with Bonjour LAN auto-discovery and bundled mobile client (`SecondaryDisplayClient.html`).
+

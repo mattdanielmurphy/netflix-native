@@ -15,6 +15,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         setupMainMenu()
         
+        // Start local subtitle & dialogue streaming server
+        EmbeddedHTTPServer.shared.start()
+        
         let controller = MainWindowController()
         self.mainWindowController = controller
         controller.showWindow(self)
@@ -25,6 +28,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             NSApp.activate(ignoringOtherApps: true)
         }
+    }
+    
+    func applicationWillTerminate(_ notification: Notification) {
+        EmbeddedHTTPServer.shared.stop()
     }
     
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -89,6 +96,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let homeItem = NSMenuItem(title: "Go to Netflix Home", action: #selector(goHome), keyEquivalent: "H")
         viewMenu.addItem(homeItem)
         viewMenu.addItem(NSMenuItem.separator())
+        
+        let toggleDialogueItem = NSMenuItem(title: "Toggle Dialogue Waterfall", action: #selector(toggleDialogueWaterfall), keyEquivalent: "d")
+        toggleDialogueItem.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(toggleDialogueItem)
+        
+        let openDisplayClientItem = NSMenuItem(title: "Open Mobile / Second Display Client", action: #selector(openDisplayClientInBrowser), keyEquivalent: "")
+        viewMenu.addItem(openDisplayClientItem)
+        
+        viewMenu.addItem(NSMenuItem.separator())
         let fullScreenItem = NSMenuItem(title: "Toggle Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
         fullScreenItem.keyEquivalentModifierMask = [.command, .control]
         viewMenu.addItem(fullScreenItem)
@@ -113,4 +129,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func goHome() {
         mainWindowController?.navigateHome()
     }
+    
+    @objc private func toggleDialogueWaterfall() {
+        AppState.shared.toggleOverlay()
+    }
+    
+    @objc private func openDisplayClientInBrowser() {
+        let port = AppState.shared.serverPort
+        if let url = URL(string: "http://localhost:\(port)") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 }
+

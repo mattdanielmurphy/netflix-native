@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Netflix Dialogue Stream</title>
+    <style>
+        :root {
+            --bg-color: #141414;
+            --card-bg: #1f1f1f;
+            --card-active: #2a2a2a;
+            --text-main: #ffffff;
+            --text-dim: #a3a3a3;
+            --accent: #e50914;
+            --time-bg: #333333;
+            --highlight: #f5c518;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        header {
+            background-color: rgba(20, 20, 20, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid #262626;
+            z-index: 10;
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #46d369;
+            box-shadow: 0 0 6px rgba(70, 211, 105, 0.6);
+        }
+
+        .status-dot.disconnected {
+            background-color: #e50914;
+            box-shadow: 0 0 6px rgba(229, 9, 20, 0.6);
+        }
+
+        .search-bar {
+            padding: 8px 16px;
+            background-color: #181818;
+            border-bottom: 1px solid #262626;
+        }
+
+        .search-input {
+            width: 100%;
+            background-color: #2b2b2b;
+            border: 1px solid #383838;
+            border-radius: 6px;
+            padding: 8px 12px;
+            color: #fff;
+            font-size: 14px;
+            outline: none;
+        }
+
+        .search-input:focus {
+            border-color: var(--accent);
+        }
+
+        #dialogue-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            scroll-behavior: smooth;
+        }
+
+        .cue-card {
+            background-color: var(--card-bg);
+            border-radius: 8px;
+            padding: 10px 14px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            cursor: pointer;
+            transition: transform 0.1s ease, background-color 0.15s ease;
+            border: 1px solid transparent;
+        }
+
+        .cue-card:active {
+            transform: scale(0.98);
+            background-color: var(--card-active);
+        }
+
+        .cue-card.active {
+            border-color: var(--highlight);
+            background-color: rgba(245, 197, 24, 0.08);
+        }
+
+        .cue-time {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 11px;
+            font-weight: 600;
+            background-color: var(--time-bg);
+            color: var(--text-dim);
+            padding: 3px 6px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+
+        .cue-card.active .cue-time {
+            background-color: var(--highlight);
+            color: #000;
+        }
+
+        .cue-text {
+            font-size: 14px;
+            line-height: 1.4;
+            color: var(--text-main);
+            flex: 1;
+        }
+
+        .cue-card.active .cue-text {
+            font-weight: 600;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            flex: 1;
+            color: var(--text-dim);
+            font-size: 14px;
+            gap: 8px;
+        }
+
+        footer {
+            padding: 10px 16px;
+            background-color: #181818;
+            border-top: 1px solid #262626;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+
+        .btn-action {
+            background-color: #333;
+            border: none;
+            color: #fff;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .btn-action:hover {
+            background-color: #444;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="brand">
+            <div class="status-dot" id="status-indicator"></div>
+            <span>Netflix Subtitles</span>
+        </div>
+        <div id="line-counter" style="font-size: 12px; color: var(--text-dim);">0 lines</div>
+    </header>
+
+    <div class="search-bar">
+        <input type="text" class="search-input" id="search-box" placeholder="Search transcript...">
+    </div>
+
+    <div id="dialogue-list">
+        <div class="empty-state" id="empty-state">
+            <p>Connecting to Netflix Native...</p>
+        </div>
+    </div>
+
+    <footer>
+        <span>Tap any line to seek</span>
+        <button class="btn-action" id="scroll-bottom-btn">Follow Live</button>
+    </footer>
+
+    <script>
+        let ws = null;
+        let cues = [];
+        let autoScroll = true;
+        let activeCueId = null;
+
+        const listEl = document.getElementById('dialogue-list');
+        const emptyEl = document.getElementById('empty-state');
+        const statusEl = document.getElementById('status-indicator');
+        const countEl = document.getElementById('line-counter');
+        const searchInput = document.getElementById('search-box');
+        const followBtn = document.getElementById('scroll-bottom-btn');
+
+        function connect() {
+            const loc = window.location;
+            const wsUrl = (loc.protocol === 'https:' ? 'wss://' : 'ws://') + loc.host + '/ws';
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                statusEl.className = 'status-dot';
+                if (cues.length === 0) {
+                    emptyEl.innerHTML = '<p>Connected. Waiting for dialogue...</p>';
+                }
+            };
+
+            ws.onclose = () => {
+                statusEl.className = 'status-dot disconnected';
+                setTimeout(connect, 2000);
+            };
+
+            ws.onerror = () => {
+                statusEl.className = 'status-dot disconnected';
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    if (msg.type === 'history' && Array.isArray(msg.history)) {
+                        cues = msg.history;
+                        render();
+                    } else if (msg.type === 'cue' && msg.cue) {
+                        const existing = cues.find(c => c.id === msg.cue.id);
+                        if (!existing) {
+                            cues.push(msg.cue);
+                            activeCueId = msg.cue.id;
+                            render();
+                        }
+                    } else if (msg.type === 'clear') {
+                        cues = [];
+                        activeCueId = null;
+                        render();
+                    }
+                } catch(e) {
+                    console.error('Failed to parse frame:', e);
+                }
+            };
+        }
+
+        function render() {
+            const filter = searchInput.value.toLowerCase().trim();
+            const filtered = filter ? cues.filter(c => c.text.toLowerCase().includes(filter)) : cues;
+
+            countEl.textContent = `${filtered.length} line${filtered.length === 1 ? '' : 's'}`;
+
+            if (filtered.length === 0) {
+                listEl.innerHTML = '';
+                listEl.appendChild(emptyEl);
+                emptyEl.innerHTML = filter ? '<p>No matching dialogue found.</p>' : '<p>Waiting for dialogue...</p>';
+                return;
+            }
+
+            listEl.innerHTML = '';
+            filtered.forEach(cue => {
+                const card = document.createElement('div');
+                card.className = 'cue-card' + (cue.id === activeCueId ? ' active' : '');
+                card.onclick = () => seek(cue.startTime);
+
+                const timeBadge = document.createElement('div');
+                timeBadge.className = 'cue-time';
+                timeBadge.textContent = cue.formattedTime || formatTime(cue.startTime);
+
+                const textSpan = document.createElement('div');
+                textSpan.className = 'cue-text';
+                textSpan.textContent = cue.text;
+
+                card.appendChild(timeBadge);
+                card.appendChild(textSpan);
+                listEl.appendChild(card);
+            });
+
+            if (autoScroll && !filter) {
+                listEl.scrollTop = listEl.scrollHeight;
+            }
+        }
+
+        function seek(seconds) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ action: 'seek', time: seconds }));
+            }
+        }
+
+        function formatTime(s) {
+            const sec = Math.max(0, Math.floor(s || 0));
+            const hrs = Math.floor(sec / 3600);
+            const mins = Math.floor((sec % 3600) / 60);
+            const rsecs = sec % 60;
+            if (hrs > 0) return `${hrs}:${mins < 10 ? '0' : ''}${mins}:${rsecs < 10 ? '0' : ''}${rsecs}`;
+            return `${mins < 10 ? '0' : ''}${mins}:${rsecs < 10 ? '0' : ''}${rsecs}`;
+        }
+
+        searchInput.oninput = () => render();
+
+        listEl.onscroll = () => {
+            const isNearBottom = listEl.scrollHeight - listEl.scrollTop - listEl.clientHeight < 40;
+            autoScroll = isNearBottom;
+            followBtn.style.opacity = autoScroll ? '0.5' : '1';
+        };
+
+        followBtn.onclick = () => {
+            autoScroll = true;
+            listEl.scrollTop = listEl.scrollHeight;
+            followBtn.style.opacity = '0.5';
+        };
+
+        connect();
+    </script>
+</body>
+</html>

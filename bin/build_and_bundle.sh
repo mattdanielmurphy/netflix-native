@@ -16,10 +16,15 @@ mkdir -p "$APP_BUNDLE/Contents/Resources"
 cp "$PROJECT_ROOT/.build/release/NetflixNative" "$APP_BUNDLE/Contents/MacOS/NetflixNative"
 cp "$PROJECT_ROOT/Resources/Info.plist" "$APP_BUNDLE/Contents/Info.plist"
 
-# Copy icon if available
+# Copy icon and web resources if available
 if [ -f "$PROJECT_ROOT/Resources/AppIcon.icns" ]; then
     cp "$PROJECT_ROOT/Resources/AppIcon.icns" "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
 fi
+
+if [ -f "$PROJECT_ROOT/Resources/SecondaryDisplayClient.html" ]; then
+    cp "$PROJECT_ROOT/Resources/SecondaryDisplayClient.html" "$APP_BUNDLE/Contents/Resources/SecondaryDisplayClient.html"
+fi
+
 
 # Ad-hoc code sign bundle for LaunchServices
 codesign --force --deep --sign - "$APP_BUNDLE" 2>/dev/null || true
