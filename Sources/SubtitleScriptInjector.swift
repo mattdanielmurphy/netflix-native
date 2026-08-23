@@ -200,6 +200,46 @@ struct SubtitleScriptInjector {
             subtitleObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
         }
 
+        var userSubtitlesVisible = true;
+        var subtitleStyleElement = null;
+
+        function updateSubtitleVisibility() {
+            if (!subtitleStyleElement) {
+                subtitleStyleElement = document.createElement('style');
+                subtitleStyleElement.id = 'netflix-native-subtitle-toggle-style';
+                document.head.appendChild(subtitleStyleElement);
+            }
+            if (userSubtitlesVisible) {
+                subtitleStyleElement.textContent = '';
+            } else {
+                subtitleStyleElement.textContent = '.player-timedtext, .timed-text-container, [data-uia="player-timedtext"] { opacity: 0 !important; }';
+            }
+        }
+
+        function ensureSubtitlesActive() {
+            try {
+                var player = getNetflixVideoPlayer();
+                if (player && typeof player.getTimedTextTracks === 'function' && typeof player.setTimedTextTrack === 'function') {
+                    var currentTrack = typeof player.getTimedTextTrack === 'function' ? player.getTimedTextTrack() : null;
+                    if (!currentTrack || !currentTrack.trackId || currentTrack.trackId === 'none') {
+                        var tracks = player.getTimedTextTracks();
+                        if (tracks && tracks.length > 0) {
+                            // Select English or primary default track
+                            var selectedTrack = tracks.find(function(t) {
+                                return t.bcp47 === 'en' || (t.language && t.language.toLowerCase().indexOf('english') !== -1);
+                            }) || tracks[0];
+                            
+                            if (selectedTrack) {
+                                player.setTimedTextTrack(selectedTrack);
+                            }
+                        }
+                    }
+                }
+            } catch(e) {
+                // Ignore silent track activation errors
+            }
+        }
+
         // Programmatic Seeking API using Cadence VideoPlayer API (avoiding video.currentTime deadlock)
         window.__netflixNativeSeek = function(targetSeconds) {
             isSeekingInternal = true;
@@ -220,6 +260,17 @@ struct SubtitleScriptInjector {
             // If Cadence player is unavailable, do NOT force video.currentTime to prevent FairPlay lockup
             setTimeout(function() { isSeekingInternal = false; }, 800);
             return false;
+        };
+
+        window.__netflixNativeSetSubtitlesVisible = function(visible) {
+            userSubtitlesVisible = visible;
+            updateSubtitleVisibility();
+        };
+
+        window.__netflixNativeToggleSubtitlesVisible = function() {
+            userSubtitlesVisible = !userSubtitlesVisible;
+            updateSubtitleVisibility();
+            return userSubtitlesVisible;
         };
 
         window.__netflixNativePlayPause = function() {
@@ -261,21 +312,31 @@ struct SubtitleScriptInjector {
             }
         }, { passive: true });
 
-        // Hotkey 'D' to toggle overlay
+        // Hotkeys: 'D' for Dialogue Waterfall, 'C' / 'V' for On-Screen Subtitle Visibility Toggle
         window.addEventListener('keydown', function(e) {
             var active = document.activeElement;
             var isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
-            if (!isInput && (e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+            if (isInput) return;
+
+            if ((e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
                 if (window.location.pathname.indexOf('/watch/') !== -1) {
                     postToNative({ type: 'toggleOverlay' });
+                }
+            } else if ((e.key === 'c' || e.key === 'C' || e.key === 'v' || e.key === 'V') && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                if (window.location.pathname.indexOf('/watch/') !== -1) {
+                    window.__netflixNativeToggleSubtitlesVisible();
                 }
             }
         }, true);
 
-        // URL change monitor
+        // URL change & subtitle track verification monitor
         var currentUrl = window.location.href;
         setInterval(function() {
             getActiveVideo();
+            if (window.location.pathname.indexOf('/watch/') !== -1) {
+                ensureSubtitlesActive();
+            }
+
             if (window.location.href !== currentUrl) {
                 currentUrl = window.location.href;
                 lastSubtitleText = '';
@@ -288,6 +349,7 @@ struct SubtitleScriptInjector {
             }
         }, 1000);
 
+        updateSubtitleVisibility();
         startObserving();
     })();
     """

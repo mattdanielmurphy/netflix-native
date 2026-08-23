@@ -8,5 +8,7 @@
 - **2026-08-22 18:04**: Created public GitHub repository (`mattdanielmurphy/netflix-native`), added MIT license, and published comprehensive README with 4K requirements warning, feature breakdown, keyboard shortcuts, and 1-line installation instructions.
 - **2026-08-23 01:08**: Implemented real-time subtitle extraction, Mac dialogue waterfall HUD overlay (with search and click-to-seek via `⌘⇧D` / `D` / scroll-up), and an embedded zero-dependency local HTTP/WebSocket streaming server (`EmbeddedHTTPServer.swift` using `NWListener`) with Bonjour LAN auto-discovery and bundled mobile client (`SecondaryDisplayClient.html`).
 - **2026-08-23 01:30**: Fixed tripled/repeated subtitle lines by sanitizing DOM extraction to target distinct visual line containers and leaf text nodes. Fixed player freezing and history corruption on seek by using Netflix's Cadence `videoPlayer.seek()` API (removing `<video>.currentTime` mutations) and adding `handleSeeked` timeline re-anchoring in `AppState`.
+- **2026-08-23 01:36**: Added `ensureSubtitlesActive()` to automatically activate the background timed text track via Cadence player API (`setTimedTextTrack`) so subtitles are continuously captured even if off by default, and introduced `C`/`V` hotkeys to toggle on-screen subtitle visibility independently.
+
 
 
