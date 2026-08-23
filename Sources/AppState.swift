@@ -30,6 +30,7 @@ final class AppState: ObservableObject {
     var currentSnapshot: PlayerSnapshot?
     var connectedClientsCount: Int = 0
     var serverPort: UInt16 = 8765
+    var isSeeking: Bool = false
     
     // Callback hooks for UI / WebViewController updates
     var onDialogueHistoryChanged: (([SubtitleCue]) -> Void)?
@@ -43,12 +44,18 @@ final class AppState: ObservableObject {
     private init() {}
     
     func appendCue(_ cue: SubtitleCue) {
-        // Prevent duplicate consecutive lines
-        if let last = dialogueHistory.last, last.text == cue.text {
-            // Update end time if current cue is active
-            activeCue = cue
-            onActiveCueChanged?(cue)
-            return
+        if isSeeking { return }
+        
+        let trimmedText = cue.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedText.isEmpty else { return }
+        
+        // Deduplicate against the most recent cues
+        if let last = dialogueHistory.last {
+            if last.text == trimmedText || abs(last.startTime - cue.startTime) < 1.0 {
+                activeCue = cue
+                onActiveCueChanged?(cue)
+                return
+            }
         }
         
         dialogueHistory.append(cue)
@@ -61,6 +68,27 @@ final class AppState: ObservableObject {
             guard let self = self else { return }
             self.onDialogueHistoryChanged?(self.dialogueHistory)
             self.onActiveCueChanged?(cue)
+        }
+    }
+    
+    func handleSeeked(at seconds: Double) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            self.isSeeking = true
+            
+            // Re-anchor timeline: remove future cues that occurred after target time to prevent chronological corruption
+            self.dialogueHistory.removeAll { $0.startTime > (seconds + 1.0) }
+            self.activeCue = self.dialogueHistory.last
+            
+            self.onDialogueHistoryChanged?(self.dialogueHistory)
+            self.onActiveCueChanged?(self.activeCue)
+            
+            // Broadcast new synchronized history to LAN display clients
+            EmbeddedHTTPServer.shared.broadcastHistory(self.dialogueHistory)
+            
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
+                self?.isSeeking = false
+            }
         }
     }
     
@@ -91,6 +119,7 @@ final class AppState: ObservableObject {
     }
     
     func requestSeek(to seconds: Double) {
+        isSeeking = true
         DispatchQueue.main.async { [weak self] in
             self?.onSeekRequested?(seconds)
         }
@@ -118,4 +147,3 @@ final class AppState: ObservableObject {
         }
     }
 }
-

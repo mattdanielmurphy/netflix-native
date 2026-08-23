@@ -20,9 +20,9 @@ final class SubtitleStreamBridge: NSObject, WKScriptMessageHandler {
             handleCueMessage(dict)
         case "toggleOverlay":
             AppState.shared.toggleOverlay()
-        case "seek":
-            if let seconds = dict["seconds"] as? Double {
-                AppState.shared.requestSeek(to: seconds)
+        case "seeked":
+            if let seconds = dict["currentTime"] as? Double {
+                AppState.shared.handleSeeked(at: seconds)
             }
         case "urlChanged":
             if let isWatch = dict["isWatch"] as? Bool, !isWatch {
@@ -41,7 +41,7 @@ final class SubtitleStreamBridge: NSObject, WKScriptMessageHandler {
         }
         
         let id = dict["id"] as? String ?? UUID().uuidString
-        let endTime = dict["endTime"] as? Double ?? (startTime + 4.0)
+        let endTime = dict["endTime"] as? Double ?? (startTime + 3.5)
         let formattedTime = dict["formattedTime"] as? String ?? SubtitleCue.formatSeconds(startTime)
         let timestamp = dict["timestamp"] as? Double ?? Date().timeIntervalSince1970
         

@@ -8,54 +8,71 @@ struct SubtitleScriptInjector {
 
         var lastSubtitleText = '';
         var lastSubtitleTime = 0;
+        var isSeekingInternal = false;
         var subtitleObserver = null;
         var videoElement = null;
 
         function getActiveVideo() {
             if (videoElement && document.body.contains(videoElement)) return videoElement;
             videoElement = document.querySelector('video');
+            if (videoElement) {
+                attachVideoListeners(videoElement);
+            }
             return videoElement;
         }
 
-        function getNetflixPlayerAPI() {
+        function attachVideoListeners(video) {
+            if (video.__nativeListenersAttached) return;
+            video.__nativeListenersAttached = true;
+
+            video.addEventListener('seeking', function() {
+                isSeekingInternal = true;
+            });
+
+            video.addEventListener('seeked', function() {
+                isSeekingInternal = false;
+                lastSubtitleText = '';
+                var currentTime = getCurrentTimeSeconds();
+                lastSubtitleTime = currentTime;
+                postToNative({
+                    type: 'seeked',
+                    currentTime: currentTime
+                });
+            });
+        }
+
+        function getNetflixVideoPlayer() {
             try {
                 if (window.netflix && window.netflix.appContext) {
                     var playerApp = window.netflix.appContext.getPlayerApp();
                     if (playerApp) {
                         var api = playerApp.getAPI();
                         if (api && api.videoPlayer) {
-                            return api.videoPlayer;
+                            var sessionIds = api.videoPlayer.getAllPlayerSessionIds();
+                            if (sessionIds && sessionIds.length > 0) {
+                                var activeSessionId = sessionIds[sessionIds.length - 1];
+                                return api.videoPlayer.getVideoPlayerBySessionId(activeSessionId);
+                            }
                         }
                     }
                 }
             } catch(e) {
-                // Ignore API access failure
-            }
-            return null;
-        }
-
-        function getSessionId(player) {
-            if (player) {
-                try {
-                    var sessions = player.getAllPlayerSessionIds();
-                    if (sessions && sessions.length > 0) return sessions[0];
-                } catch(e) {}
+                // Ignore API lookup errors
             }
             return null;
         }
 
         function getCurrentTimeSeconds() {
+            var player = getNetflixVideoPlayer();
+            if (player && typeof player.getCurrentTime === 'function') {
+                try {
+                    var ms = player.getCurrentTime();
+                    if (ms && !isNaN(ms)) return ms / 1000.0;
+                } catch(e) {}
+            }
             var video = getActiveVideo();
             if (video && !isNaN(video.currentTime) && video.currentTime > 0) {
                 return video.currentTime;
-            }
-            var player = getNetflixPlayerAPI();
-            var sid = getSessionId(player);
-            if (player && sid) {
-                try {
-                    var ms = player.getCurrentTime(sid);
-                    if (ms && !isNaN(ms)) return ms / 1000.0;
-                } catch(e) {}
             }
             return 0;
         }
@@ -78,54 +95,100 @@ struct SubtitleScriptInjector {
             return text;
         }
 
-        function processSubtitles() {
-            var containers = document.querySelectorAll('.player-timedtext, .timed-text-container, [data-uia="player-timedtext"]');
-            var rawText = '';
+        function extractCleanSubtitles() {
+            // Find root timed text container
+            var root = document.querySelector('.player-timedtext') || 
+                       document.querySelector('.timed-text-container') ||
+                       document.querySelector('[data-uia="player-timedtext"]');
+            if (!root) return null;
 
-            for (var i = 0; i < containers.length; i++) {
-                var c = containers[i];
-                var spans = c.querySelectorAll('.player-timedtext-text-container, span');
-                if (spans.length > 0) {
-                    var lineParts = [];
-                    for (var j = 0; j < spans.length; j++) {
-                        var t = spans[j].innerText || spans[j].textContent || '';
-                        if (t.trim()) lineParts.push(t.trim());
+            // Target the discrete line containers
+            var lineContainers = root.querySelectorAll('.player-timedtext-text-container');
+            var collectedLines = [];
+
+            if (lineContainers.length > 0) {
+                for (var i = 0; i < lineContainers.length; i++) {
+                    var container = lineContainers[i];
+                    // Look for child spans or take the container's innerText
+                    var textSpans = container.querySelectorAll('span');
+                    if (textSpans.length > 0) {
+                        // Gather leaf spans only (spans that do not contain other spans)
+                        var leafTexts = [];
+                        for (var j = 0; j < textSpans.length; j++) {
+                            var span = textSpans[j];
+                            if (span.children.length === 0) {
+                                var txt = (span.innerText || span.textContent || '').trim();
+                                if (txt && leafTexts.indexOf(txt) === -1) {
+                                    leafTexts.push(txt);
+                                }
+                            }
+                        }
+                        if (leafTexts.length > 0) {
+                            var lineStr = leafTexts.join(' ');
+                            if (lineStr && collectedLines.indexOf(lineStr) === -1) {
+                                collectedLines.push(lineStr);
+                            }
+                        }
+                    } else {
+                        var cText = (container.innerText || container.textContent || '').trim();
+                        if (cText && collectedLines.indexOf(cText) === -1) {
+                            collectedLines.push(cText);
+                        }
                     }
-                    if (lineParts.length > 0) {
-                        rawText = lineParts.join(' ');
-                        break;
+                }
+            } else {
+                // Fallback for flat structure: grab leaf spans only
+                var allSpans = root.querySelectorAll('span');
+                var leafTexts = [];
+                for (var k = 0; k < allSpans.length; k++) {
+                    if (allSpans[k].children.length === 0) {
+                        var sText = (allSpans[k].innerText || allSpans[k].textContent || '').trim();
+                        if (sText && leafTexts.indexOf(sText) === -1) {
+                            leafTexts.push(sText);
+                        }
                     }
-                } else if (c.innerText && c.innerText.trim()) {
-                    rawText = c.innerText.trim();
-                    break;
+                }
+                if (leafTexts.length > 0) {
+                    collectedLines.push(leafTexts.join(' '));
                 }
             }
 
-            var cleaned = cleanSubtitleText(rawText);
+            if (collectedLines.length === 0) return null;
+
+            var fullText = collectedLines.join(' ').replace(/\\s+/g, ' ').trim();
+            return cleanSubtitleText(fullText);
+        }
+
+        function processSubtitles() {
+            if (isSeekingInternal) return;
+
+            var cleaned = extractCleanSubtitles();
             if (!cleaned) return;
 
             var currentTime = getCurrentTimeSeconds();
-            if (cleaned !== lastSubtitleText || Math.abs(currentTime - lastSubtitleTime) > 4.0) {
+            if (cleaned !== lastSubtitleText || Math.abs(currentTime - lastSubtitleTime) > 3.5) {
                 lastSubtitleText = cleaned;
                 lastSubtitleTime = currentTime;
 
-                var payload = {
+                postToNative({
                     type: 'cue',
                     id: Date.now() + '_' + Math.floor(currentTime),
                     text: cleaned,
                     startTime: currentTime,
-                    endTime: currentTime + 4.0,
+                    endTime: currentTime + 3.5,
                     formattedTime: formatTime(currentTime),
                     timestamp: Date.now() / 1000.0
-                };
+                });
+            }
+        }
 
-                try {
-                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.subtitleStream) {
-                        window.webkit.messageHandlers.subtitleStream.postMessage(payload);
-                    }
-                } catch(err) {
-                    console.error('[NetflixNative] Failed to post subtitle message:', err);
+        function postToNative(payload) {
+            try {
+                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.subtitleStream) {
+                    window.webkit.messageHandlers.subtitleStream.postMessage(payload);
                 }
+            } catch(err) {
+                console.error('[NetflixNative] Message post error:', err);
             }
         }
 
@@ -137,25 +200,41 @@ struct SubtitleScriptInjector {
             subtitleObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
         }
 
-        // Attach Seek and Playback APIs
+        // Programmatic Seeking API using Cadence VideoPlayer API (avoiding video.currentTime deadlock)
         window.__netflixNativeSeek = function(targetSeconds) {
-            var player = getNetflixPlayerAPI();
-            var sid = getSessionId(player);
-            if (player && sid) {
-                try {
-                    player.seek(sid, Math.floor(targetSeconds * 1000));
+            isSeekingInternal = true;
+            lastSubtitleText = '';
+            lastSubtitleTime = targetSeconds;
+
+            try {
+                var player = getNetflixVideoPlayer();
+                if (player && typeof player.seek === 'function') {
+                    player.seek(Math.floor(targetSeconds * 1000));
+                    setTimeout(function() { isSeekingInternal = false; }, 800);
                     return true;
-                } catch(e) {}
+                }
+            } catch(e) {
+                console.warn('[NetflixNative] Cadence seek failed:', e);
             }
-            var video = getActiveVideo();
-            if (video) {
-                video.currentTime = targetSeconds;
-                return true;
-            }
+
+            // If Cadence player is unavailable, do NOT force video.currentTime to prevent FairPlay lockup
+            setTimeout(function() { isSeekingInternal = false; }, 800);
             return false;
         };
 
         window.__netflixNativePlayPause = function() {
+            try {
+                var player = getNetflixVideoPlayer();
+                if (player) {
+                    if (typeof player.isPaused === 'function' && player.isPaused()) {
+                        if (typeof player.play === 'function') player.play();
+                    } else if (typeof player.pause === 'function') {
+                        player.pause();
+                    }
+                    return;
+                }
+            } catch(e) {}
+
             var video = getActiveVideo();
             if (video) {
                 if (video.paused) video.play();
@@ -173,14 +252,11 @@ struct SubtitleScriptInjector {
             }
             lastScrollTime = now;
 
-            // Detect 2-finger scroll up / wheel up when watching video
             if (e.deltaY < -20 && window.location.pathname.indexOf('/watch/') !== -1) {
                 scrollAccumulator += Math.abs(e.deltaY);
                 if (scrollAccumulator > 80) {
                     scrollAccumulator = 0;
-                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.subtitleStream) {
-                        window.webkit.messageHandlers.subtitleStream.postMessage({ type: 'toggleOverlay' });
-                    }
+                    postToNative({ type: 'toggleOverlay' });
                 }
             }
         }, { passive: true });
@@ -191,27 +267,24 @@ struct SubtitleScriptInjector {
             var isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
             if (!isInput && (e.key === 'd' || e.key === 'D') && !e.metaKey && !e.ctrlKey && !e.altKey) {
                 if (window.location.pathname.indexOf('/watch/') !== -1) {
-                    if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.subtitleStream) {
-                        window.webkit.messageHandlers.subtitleStream.postMessage({ type: 'toggleOverlay' });
-                    }
+                    postToNative({ type: 'toggleOverlay' });
                 }
             }
         }, true);
 
-        // Track episode / URL changes
+        // URL change monitor
         var currentUrl = window.location.href;
         setInterval(function() {
+            getActiveVideo();
             if (window.location.href !== currentUrl) {
                 currentUrl = window.location.href;
                 lastSubtitleText = '';
                 lastSubtitleTime = 0;
-                if (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.subtitleStream) {
-                    window.webkit.messageHandlers.subtitleStream.postMessage({
-                        type: 'urlChanged',
-                        url: currentUrl,
-                        isWatch: currentUrl.indexOf('/watch/') !== -1
-                    });
-                }
+                postToNative({
+                    type: 'urlChanged',
+                    url: currentUrl,
+                    isWatch: currentUrl.indexOf('/watch/') !== -1
+                });
             }
         }, 1000);
 
