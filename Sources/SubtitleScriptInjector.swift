@@ -252,21 +252,45 @@ struct SubtitleScriptInjector {
                     var audioSubButton = document.querySelector('button[data-uia="control-audio-subtitle"], button[aria-label*="Subtitles"], button[aria-label*="Audio"]');
                     if (audioSubButton) {
                         // Click to open menu if not already open
-                        var menu = document.querySelector('[data-uia="audio-subtitle-controller"]');
+                        var menu = document.querySelector('[data-uia="audio-subtitle-controller"], .audio-subtitle-controller');
                         if (!menu) {
                             audioSubButton.click();
                             setTimeout(function() {
-                                var englishOption = document.querySelector('[data-uia="subtitle-item-en"], [data-uia*="subtitle-item"][aria-label*="English"], li[data-uia*="subtitle-item"]');
-                                if (englishOption) {
-                                    englishOption.click();
+                                var foundTarget = null;
+                                
+                                // Look for subtitle column options
+                                var allOptions = document.querySelectorAll('li, div[role="button"], button, [data-uia*="subtitle"]');
+                                for (var i = 0; i < allOptions.length; i++) {
+                                    var el = allOptions[i];
+                                    var text = (el.innerText || el.textContent || '').trim();
+                                    
+                                    // Match "English" or "English (CC)" or "English [CC]"
+                                    var isEnglishText = text === 'English' || text.indexOf('English (CC)') === 0 || text.indexOf('English [CC]') === 0;
+                                    if (isEnglishText && text.indexOf('[Original]') === -1 && text.indexOf('Audio Description') === -1) {
+                                        // Ensure it's under the Subtitles column (not Audio column)
+                                        var parentCol = el.closest('.track-list, [data-uia*="subtitle"], div, ul');
+                                        var prevHeader = el.parentElement ? el.parentElement.querySelector('h3, header, .header') : null;
+                                        var isAudio = (prevHeader && prevHeader.innerText.indexOf('Audio') !== -1);
+                                        
+                                        if (!isAudio) {
+                                            foundTarget = el;
+                                            break;
+                                        }
+                                    }
                                 }
-                                // Close menu by clicking button again
+                                
+                                if (foundTarget) {
+                                    foundTarget.click();
+                                }
+                                
+                                // Close menu after selection
                                 setTimeout(function() {
-                                    if (document.querySelector('[data-uia="audio-subtitle-controller"]')) {
+                                    var openMenu = document.querySelector('[data-uia="audio-subtitle-controller"], .audio-subtitle-controller');
+                                    if (openMenu) {
                                         audioSubButton.click();
                                     }
-                                }, 100);
-                            }, 150);
+                                }, 150);
+                            }, 250);
                         }
                     }
                 }
@@ -274,6 +298,7 @@ struct SubtitleScriptInjector {
                 console.warn('[NetflixNative] DOM subtitle button click error:', err);
             }
         }
+
 
 
         // Programmatic Seeking API using Cadence VideoPlayer API (avoiding video.currentTime deadlock)
