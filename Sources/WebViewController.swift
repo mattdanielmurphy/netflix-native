@@ -138,20 +138,30 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         subtitleBridge = SubtitleStreamBridge(webViewController: self)
         userContentController.add(subtitleBridge, name: "subtitleStream")
         
-        // Spacebar play/pause handler
+        // Subtitle Extractor & Remote Control Script (defines __netflixNativeHandlePlayPause, etc.)
+        let extractorScript = WKUserScript(source: SubtitleScriptInjector.scriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
+        userContentController.addUserScript(extractorScript)
+        
+        // Spacebar and 'K' play/pause handler with center play button and Cadence resume support
         let spacebarScriptSource = """
         window.addEventListener('keydown', function(e) {
-            if (e.code === 'Space' || e.keyCode === 32) {
+            var isSpace = (e.code === 'Space' || e.keyCode === 32);
+            var isKeyK = ((e.key === 'k' || e.key === 'K') && !e.metaKey && !e.ctrlKey && !e.altKey);
+            if (isSpace || isKeyK) {
                 var active = document.activeElement;
                 var isInput = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.isContentEditable);
                 if (!isInput) {
-                    var video = document.querySelector('video');
-                    if (video) {
-                        e.preventDefault();
-                        if (video.paused) {
-                            video.play();
-                        } else {
-                            video.pause();
+                    e.preventDefault();
+                    if (typeof window.__netflixNativeHandlePlayPause === 'function') {
+                        window.__netflixNativeHandlePlayPause();
+                    } else {
+                        var video = document.querySelector('video');
+                        if (video) {
+                            if (video.paused) {
+                                video.play();
+                            } else {
+                                video.pause();
+                            }
                         }
                     }
                 }
@@ -160,10 +170,6 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
         """
         let spacebarScript = WKUserScript(source: spacebarScriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
         userContentController.addUserScript(spacebarScript)
-        
-        // Subtitle Extractor & Remote Control Script
-        let extractorScript = WKUserScript(source: SubtitleScriptInjector.scriptSource, injectionTime: .atDocumentEnd, forMainFrameOnly: false)
-        userContentController.addUserScript(extractorScript)
         
         configuration.userContentController = userContentController
         return configuration
@@ -202,7 +208,13 @@ final class WebViewController: NSViewController, WKNavigationDelegate, WKUIDeleg
     
     private func handleSystemWillSleep() {
         AppState.shared.endPlaybackActivity()
-        let pauseScript = "if (document.querySelector('video')) { document.querySelector('video').pause(); }"
+        let pauseScript = """
+        if (typeof window.__netflixNativePause === 'function') {
+            window.__netflixNativePause();
+        } else if (document.querySelector('video')) {
+            document.querySelector('video').pause();
+        }
+        """
         webView.evaluateJavaScript(pauseScript, completionHandler: nil)
     }
     

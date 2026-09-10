@@ -44,9 +44,11 @@ struct SubtitleScriptInjector {
         function getNetflixVideoPlayer() {
             try {
                 if (window.netflix && window.netflix.appContext) {
-                    var playerApp = window.netflix.appContext.getPlayerApp();
+                    var playerApp = (typeof window.netflix.appContext.getPlayerApp === 'function')
+                        ? window.netflix.appContext.getPlayerApp()
+                        : (window.netflix.appContext.state ? window.netflix.appContext.state.playerApp : null);
                     if (playerApp) {
-                        var api = playerApp.getAPI();
+                        var api = (typeof playerApp.getAPI === 'function') ? playerApp.getAPI() : null;
                         if (api && api.videoPlayer) {
                             var sessionIds = api.videoPlayer.getAllPlayerSessionIds();
                             if (sessionIds && sessionIds.length > 0) {
@@ -341,25 +343,280 @@ struct SubtitleScriptInjector {
             return userSubtitlesVisible;
         };
 
-        window.__netflixNativePlayPause = function() {
+        function simulateClick(element, x, y) {
+            if (!element) return false;
+
+            var rect = (typeof element.getBoundingClientRect === 'function') ? element.getBoundingClientRect() : null;
+            var clientX = (typeof x === 'number') ? x : (rect ? (rect.left + rect.width / 2) : (window.innerWidth / 2));
+            var clientY = (typeof y === 'number') ? y : (rect ? (rect.top + rect.height / 2) : (window.innerHeight / 2));
+
+            var commonProps = {
+                bubbles: true,
+                cancelable: true,
+                composed: true,
+                view: window,
+                detail: 1,
+                clientX: clientX,
+                clientY: clientY,
+                screenX: clientX,
+                screenY: clientY,
+                button: 0,
+                buttons: 1
+            };
+
+            // 1. Pointer Down
             try {
-                var player = getNetflixVideoPlayer();
-                if (player) {
-                    if (typeof player.isPaused === 'function' && player.isPaused()) {
-                        if (typeof player.play === 'function') player.play();
-                    } else if (typeof player.pause === 'function') {
-                        player.pause();
-                    }
-                    return;
-                }
+                var pDown = new PointerEvent('pointerdown', Object.assign({}, commonProps, {
+                    pointerId: 1,
+                    pointerType: 'mouse',
+                    isPrimary: true
+                }));
+                element.dispatchEvent(pDown);
             } catch(e) {}
 
+            // 2. Mouse Down
+            try {
+                element.dispatchEvent(new MouseEvent('mousedown', commonProps));
+            } catch(e) {}
+
+            // 3. Pointer Up
+            try {
+                var pUp = new PointerEvent('pointerup', Object.assign({}, commonProps, {
+                    pointerId: 1,
+                    pointerType: 'mouse',
+                    isPrimary: true,
+                    buttons: 0
+                }));
+                element.dispatchEvent(pUp);
+            } catch(e) {}
+
+            // 4. Mouse Up
+            try {
+                element.dispatchEvent(new MouseEvent('mouseup', Object.assign({}, commonProps, { buttons: 0 })));
+            } catch(e) {}
+
+            // 5. Click
+            try {
+                element.dispatchEvent(new MouseEvent('click', Object.assign({}, commonProps, { buttons: 0 })));
+            } catch(e) {}
+
+            // 6. Native .click()
+            if (typeof element.click === 'function') {
+                try {
+                    element.click();
+                } catch(e) {}
+            }
+
+            return true;
+        }
+
+        function isVisibleElement(el) {
+            if (!el) return false;
+            var r = (typeof el.getBoundingClientRect === 'function') ? el.getBoundingClientRect() : null;
+            if (!r || (r.width === 0 && r.height === 0)) return false;
+            try {
+                var style = window.getComputedStyle(el);
+                if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+            } catch(e) {}
+            return true;
+        }
+
+        function findAndClickPlayButton() {
+            var width = window.innerWidth;
+            var height = window.innerHeight;
+            var centerX = width / 2;
+            var centerY = height / 2;
+
+            // 1. Direct hit-test around center of viewport
+            var centerHitPoints = [
+                { x: centerX, y: centerY },
+                { x: centerX, y: centerY - 30 },
+                { x: centerX, y: centerY + 30 },
+                { x: centerX - 30, y: centerY },
+                { x: centerX + 30, y: centerY },
+                { x: centerX, y: centerY - 60 },
+                { x: centerX, y: centerY + 60 }
+            ];
+
+            for (var i = 0; i < centerHitPoints.length; i++) {
+                var pt = centerHitPoints[i];
+                var hit = document.elementFromPoint(pt.x, pt.y);
+                if (hit && hit.tagName !== 'VIDEO' && hit !== document.body && hit !== document.documentElement) {
+                    // Ignore subtitle container if hit
+                    if (hit.closest && hit.closest('.player-timedtext, .timed-text-container, [data-uia="player-timedtext"]')) {
+                        continue;
+                    }
+
+                    // Check for button or role="button" or play/resume attribute
+                    var btn = hit.closest ? hit.closest('button, [role="button"], [data-uia*="play"], [data-uia*="resume"], [data-uia*="continue"], [aria-label*="play" i], [aria-label*="resume" i]') : null;
+                    if (btn && isVisibleElement(btn)) {
+                        var br = btn.getBoundingClientRect();
+                        simulateClick(btn, br.left + br.width / 2, br.top + br.height / 2);
+                        if (hit !== btn) simulateClick(hit, pt.x, pt.y);
+                        return true;
+                    }
+
+                    // Check if hit has or is an SVG (the play icon)
+                    var svg = (hit.tagName && hit.tagName.toLowerCase() === 'svg') ? hit : ((hit.closest ? hit.closest('svg') : null) || (hit.querySelector ? hit.querySelector('svg') : null));
+                    if (svg) {
+                        var container = (hit.closest ? hit.closest('button, [role="button"], a, div') : null) || hit;
+                        if (isVisibleElement(container)) {
+                            var cr = container.getBoundingClientRect();
+                            simulateClick(container, cr.left + cr.width / 2, cr.top + cr.height / 2);
+                            if (hit !== container) simulateClick(hit, pt.x, pt.y);
+                            return true;
+                        }
+                    }
+
+                    // Check if hit is an overlay container within the center region
+                    var hr = hit.getBoundingClientRect();
+                    var hitDist = Math.hypot(hr.left + hr.width / 2 - centerX, hr.top + hr.height / 2 - centerY);
+                    if (hitDist < Math.min(width, height) * 0.4 && isVisibleElement(hit)) {
+                        simulateClick(hit, pt.x, pt.y);
+                        return true;
+                    }
+                }
+            }
+
+            // 2. Search known Netflix play and resume selectors
+            var selectors = [
+                '[data-uia="play-button"]',
+                '[data-uia="watch-video-play-button"]',
+                '[data-uia="player-resume"]',
+                '[data-uia="interrupt-autoplay-continue"]',
+                '[data-uia*="play-button"]',
+                '[data-uia*="player-play"]',
+                '[data-uia*="resume"]',
+                '[data-uia*="continue"]',
+                'button[aria-label*="Play" i]',
+                'button[aria-label*="Resume" i]',
+                'button[aria-label*="Continue" i]',
+                '[role="button"][aria-label*="Play" i]',
+                '[role="button"][aria-label*="Resume" i]',
+                '.button-nfplayerPlay',
+                '.nf-player-play',
+                'button[data-uia="control-play-pause-play"]'
+            ];
+
+            var candidates = document.querySelectorAll(selectors.join(', '));
+            var bestCandidate = null;
+            var minDistance = Infinity;
+
+            for (var k = 0; k < candidates.length; k++) {
+                var el = candidates[k];
+                if (isVisibleElement(el)) {
+                    var rect = el.getBoundingClientRect();
+                    var elX = rect.left + rect.width / 2;
+                    var elY = rect.top + rect.height / 2;
+                    var dist = Math.hypot(elX - centerX, elY - centerY);
+                    if (dist < minDistance) {
+                        minDistance = dist;
+                        bestCandidate = { element: el, x: elX, y: elY };
+                    }
+                }
+            }
+
+            if (bestCandidate) {
+                simulateClick(bestCandidate.element, bestCandidate.x, bestCandidate.y);
+                return true;
+            }
+
+            return false;
+        }
+
+        function findAndClickPauseButton() {
+            var selectors = [
+                'button[data-uia="control-play-pause-pause"]',
+                'button[data-uia="control-play-pause"]',
+                'button[aria-label*="Pause" i]',
+                '[role="button"][aria-label*="Pause" i]'
+            ];
+            for (var i = 0; i < selectors.length; i++) {
+                var btn = document.querySelector(selectors[i]);
+                if (btn && isVisibleElement(btn)) {
+                    var r = btn.getBoundingClientRect();
+                    simulateClick(btn, r.left + r.width / 2, r.top + r.height / 2);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        window.__netflixNativeHandlePlayPause = function() {
             var video = getActiveVideo();
-            if (video) {
-                if (video.paused) video.play();
-                else video.pause();
+            var player = getNetflixVideoPlayer();
+
+            // Determine if content is currently considered playing or paused
+            var isPaused = true;
+            if (player && typeof player.isPaused === 'function') {
+                isPaused = player.isPaused();
+            } else if (video) {
+                isPaused = video.paused;
+            }
+
+            // Check if there is an on-screen play button / overlay
+            var clickedPlayBtn = findAndClickPlayButton();
+
+            if (clickedPlayBtn) {
+                // Clicking the on-screen play button triggered Netflix's UI resume handler.
+                // Re-check after 150ms to ensure player state matches
+                setTimeout(function() {
+                    var p = getNetflixVideoPlayer();
+                    if (p && typeof p.isPaused === 'function' && p.isPaused()) {
+                        if (typeof p.play === 'function') {
+                            try { p.play(); } catch(e) {}
+                        }
+                    }
+                }, 150);
+                return;
+            }
+
+            // If no play button was clicked:
+            if (isPaused) {
+                // Resume playback: try Cadence player API first
+                if (player && typeof player.play === 'function') {
+                    try {
+                        player.play();
+                        return;
+                    } catch(e) {}
+                }
+                // Fallback to active video
+                if (video && video.paused) {
+                    try { video.play(); } catch(e) {}
+                }
+            } else {
+                // Pause playback: try pause button or Cadence player API
+                var clickedPauseBtn = findAndClickPauseButton();
+                if (!clickedPauseBtn) {
+                    if (player && typeof player.pause === 'function') {
+                        try {
+                            player.pause();
+                            return;
+                        } catch(e) {}
+                    }
+                    if (video && !video.paused) {
+                        try { video.pause(); } catch(e) {}
+                    }
+                }
             }
         };
+
+        window.__netflixNativePause = function() {
+            var player = getNetflixVideoPlayer();
+            if (player && typeof player.pause === 'function') {
+                try {
+                    player.pause();
+                    return;
+                } catch(e) {}
+            }
+            findAndClickPauseButton();
+            var video = getActiveVideo();
+            if (video && !video.paused) {
+                try { video.pause(); } catch(e) {}
+            }
+        };
+
+        window.__netflixNativePlayPause = window.__netflixNativeHandlePlayPause;
 
         // Scroll-up listener to reveal Mac waterfall dialogue
         var scrollAccumulator = 0;
